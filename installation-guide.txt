@@ -1,0 +1,229 @@
+
+No-Secured
+    1. check firewall, 7000 must be allowed between all cassandra nodes.
+    2. install cassandra but do not start db
+    3. vi {CASSANDRA_HOME}/conf/cassandra.yaml: change the config accordingly,
+       for every node, initial_token can be random number, here is the function to help:
+       python -c 'number_of_tokens={node_num}; print [str((({node_num-1}**64 / number_of_tokens) * i) - {node_num-1}**63) for i in range(number_of_tokens)]'
+       e.g. python -c 'number_of_tokens=3; print [str(((2**64 / number_of_tokens) * i) - 2**63) for i in range(number_of_tokens)]'
+        +--------------+--------------+
+        |         For All Nodes       |
+        +--------------+--------------+
+        +------------------------------------+------------------------------------+
+        |NAME                                |Value                               |
+        +------------------------------------+------------------------------------+
+        |cluster_name                        |DST HA {Env}                        |
+        |seed_provider, parameters, seeds:   |{IPA}                               |
+        |start_native_transport              |true                                |
+        |native_transport_port               |9042                                |
+        |authenticator                       |PasswordAuthenticator               |
+        |authorizer                          |CassandraAuthorizer                 |
+        |endpoint_snitch                     |SimpleSnitch                        |
+        +------------------------------------+------------------------------------+
+        SimpleStrategy is used only for a single datacenter and one rack.
+        SimpleStrategy places the first replica on a node determined by the partitioner.
+        Additional replicas are placed on the next nodes clockwise in the ring without considering topology (rack or datacenter location).
+        NetworkTopologyStrategy is used when you have (or plan to have) your cluster deployed across multiple datacenters.
+        This strategy specifies how many replicas you want in each datacenter.
+
+        +--------------+--------------+
+        |    For Node A (Seed_Node)   |
+        +--------------+--------------+
+        +------------------------------------+------------------------------------+
+        |NAME                                |Value                               |
+        +------------------------------------+------------------------------------+
+        |listen_address                      |{IPA}                               |
+        |rpc_address                         |{IPA}                               |
+        |initial_token                       |{random number}                     |
+        +------------------------------------+------------------------------------+
+
+        +--------------+--------------+
+        |         For Node B          |
+        +--------------+--------------+
+        +------------------------------------+------------------------------------+
+        |NAME                                |Value                               |
+        +------------------------------------+------------------------------------+
+        |listen_address                      |{IPB}                               |
+        |rpc_address                         |{IPB}                               |
+        |initial_token                       |{random number}                     |
+        +------------------------------------+------------------------------------+
+
+        +--------------+--------------+
+        |         For Node C          |
+        +--------------+--------------+
+        +------------------------------------+------------------------------------+
+        |NAME                                |Value                               |
+        +------------------------------------+------------------------------------+
+        |listen_address                      |{IPC}                               |
+        |rpc_address                         |{IPC}                               |
+        |initial_token                       |{random number}                     |
+        +------------------------------------+------------------------------------+
+
+    4. start all cassandra: ./cassandra
+    5. ALTER KEYSPACE "system_auth" WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 3 };
+    6. restart all cassandra
+    7. check cluster status: ./nodetool status, expected result should be:
+
+        Datacenter: datacenter1
+        =======================
+        Status=Up/Down
+        |/ State=Normal/Leaving/Joining/Moving
+        --  Address       Load       Tokens       Owns (effective)  Host ID                               Rack
+        UN  10.11.11.169  3.33 MB    256          100.0%            2da334c5-2ee6-4eee-a80d-3544d8b8e2e1  rack1
+        UN  10.11.1.242   4.98 MB    256          100.0%            749175e9-992f-4dfd-8b08-d845d66e922a  rack1
+        UN  10.11.11.68   4.99 MB    256          100.0%            8e76bf41-8a77-4ff6-89c9-ba12c3d58382  rack1
+
+# if there is any problem about cassandra cluster sync up data, run 'nodetool repair' to fix.
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Secured Traffic, Server-to-Server
+    1. check firewall, 7001 must be allowed between all cassandra nodes.
+    2. install cassandra but do not start db
+    3. generate private key and self-signed cert
+
+         openssl genrsa -out server.pem 2048
+         openssl req -x509 -key server.pem -out server-ca.pem -days 3650
+         openssl pkcs12 -export -in server-ca.pem -inkey server.pem -out server.p12
+
+    4. install private key and self-signed cert in every node:
+
+         keytool -keystore {CASSANDRA_HOME}/conf/server-truststore.jks -importcert -file server-ca.pem -storepass {truststore_pass} -noprompt
+         keytool -importkeystore -deststorepass {keystore_pass} -destkeypass {keystore_pass} -destkeystore /opt/cassandra/conf/server-keystore.jks -srckeystore server.p12 -srcstoretype PKCS12
+         keytool -keystore /opt/cassandra/conf/server-keystore.jks -importcert -file server-ca.pem -storepass {keystore_pass} -noprompt
+
+    5. vi {CASSANDRA_HOME}/conf/cassandra.yaml: change the config accordingly,
+           for every node, initial_token can be random number, here is the function to help:
+           python -c 'number_of_tokens={node_num}; print [str((({node_num-1}**64 / number_of_tokens) * i) - {node_num-1}**63) for i in range(number_of_tokens)]'
+           e.g. python -c 'number_of_tokens=3; print [str(((2**64 / number_of_tokens) * i) - 2**63) for i in range(number_of_tokens)]'
+        +--------------+--------------+
+        |         For All Nodes       |
+        +--------------+--------------+
+        +------------------------------------+------------------------------------+
+        |NAME                                |Value                               |
+        +------------------------------------+------------------------------------+
+        |cluster_name                        |DST HA {Env}                        |
+        |seed_provider, parameters, seeds:   |{IPA}                               |
+        |start_native_transport              |true                                |
+        |native_transport_port               |9042                                |
+        |authenticator                       |PasswordAuthenticator               |
+        |authorizer                          |CassandraAuthorizer                 |
+        |internode_encryption                |all                                 |
+        |keystore                            |{path of server-keystore.jks}       |
+        |keystore_password                   |{keystore_pass}                     |
+        |truststore                          |{path of server-truststore.jks}     |
+        |truststore_password                 |{truststore_pass}                   |
+        |protocol                            |TLS                                 |
+        |store_type                          |JKS                                 |
+        |algorithm                           |SunX509                             |
+        |require_client_auth                 |true                                |
+        +------------------------------------+------------------------------------+
+
+        +--------------+--------------+
+        |    For Node A (Seed_Node)   |
+        +--------------+--------------+
+        +------------------------------------+------------------------------------+
+        |NAME                                |Value                               |
+        +------------------------------------+------------------------------------+
+        |listen_address                      |{IPA}                               |
+        |rpc_address                         |{IPA}                               |
+        |initial_token                       |{random number}                     |
+        +------------------------------------+------------------------------------+
+
+        +--------------+--------------+
+        |         For Node B          |
+        +--------------+--------------+
+        +------------------------------------+------------------------------------+
+        |NAME                                |Value                               |
+        +------------------------------------+------------------------------------+
+        |listen_address                      |{IPB}                               |
+        |rpc_address                         |{IPB}                               |
+        |initial_token                       |{random number}                     |
+        +------------------------------------+------------------------------------+
+
+        +--------------+--------------+
+        |         For Node C          |
+        +--------------+--------------+
+        +------------------------------------+------------------------------------+
+        |NAME                                |Value                               |
+        +------------------------------------+------------------------------------+
+        |listen_address                      |{IPC}                               |
+        |rpc_address                         |{IPC}                               |
+        |initial_token                       |{random number}                     |
+        +------------------------------------+------------------------------------+
+
+    6. start all cassandra: ./cassandra
+    7. ALTER KEYSPACE "system_auth" WITH REPLICATION = { 'class': 'SimpleStrategy', 'replication_factor': 3 };
+    8. restart all cassandra
+    9. check cluster status: ./nodetool status, expected result should be:
+
+        Datacenter: datacenter1
+        =======================
+        Status=Up/Down
+        |/ State=Normal/Leaving/Joining/Moving
+        --  Address       Load       Tokens       Owns (effective)  Host ID                               Rack
+        UN  10.11.11.169  3.33 MB    256          100.0%            2da334c5-2ee6-4eee-a80d-3544d8b8e2e1  rack1
+        UN  10.11.1.242   4.98 MB    256          100.0%            749175e9-992f-4dfd-8b08-d845d66e922a  rack1
+        UN  10.11.11.68   4.99 MB    256          100.0%            8e76bf41-8a77-4ff6-89c9-ba12c3d58382  rack1
+
+# if there is any problem about cassandra cluster sync up data, run 'nodetool repair' to fix.
+
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+Secured Traffic, Client-to-Server
+    1. check firewall, 9042 must be allowed between cassandra clients and servers.
+    2. install cassandra but do not start db
+    3. generate private key and self-signed cert, this keypair is used by cassandra
+
+         openssl genrsa -out client.pem 2048
+         openssl req -x509 -key client.pem -out client-ca.pem -days 3650
+         openssl pkcs12 -export -in client-ca.pem -inkey client.pem -out client.p12
+
+    4. use the CA keypair in last step to sign the cert, this one is used by cqlsh (client tool)
+
+         openssl req -newkey rsa:2048 -nodes -keyout client_key.key -out signing_request.csr
+         openssl x509 -req -CA client-ca.pem -CAkey client.pem -in signing_request.csr -out client_cert.crt_signed -days 3650 -CAcreateserial
+
+    4. install private key and self-signed cert in every cassandra node:
+
+         keytool -keystore {CASSANDRA_HOME}/conf/client-truststore.jks -importcert -file client-ca.pem -storepass {truststore_pass} -noprompt
+         keytool -importkeystore -deststorepass {keystore_pass} -destkeypass {keystore_pass} -destkeystore {CASSANDRA_HOME}/conf/client-keystore.jks -srckeystore client.p12 -srcstoretype PKCS12
+         keytool -keystore {CASSANDRA_HOME}/conf/client-keystore.jks -importcert -file client-ca.pem -storepass {keystore_pass} -noprompt
+
+         +--------------+--------------+
+         |         For All Nodes       |
+         +--------------+--------------+
+         +------------------------------------+------------------------------------+
+         |NAME                                |Value                               |
+         +------------------------------------+------------------------------------+
+         |enabled                             |true                                |
+         |optional                            |false                               |
+         |keystore                            |{path of client-keystore.jks}       |
+         |keystore_password                   |{Randomly generated password}       |
+         |truststore                          |{path of client-truststore.jks}     |
+         |truststore_password                 |{Randomly generated password}       |
+         |protocol                            |TLS                                 |
+         |store_type                          |JKS                                 |
+         |algorithm                           |SunX509                             |
+         |require_client_auth                 |true                                |
+         +------------------------------------+------------------------------------+
+
+    5. prepare cqlshrc file, and save to {CASSANDRA_HOME}/bin
+
+        [connection]
+        hostname = {the ip of this machine}
+        port = 9042
+        factory = cqlshlib.ssl.ssl_transport_factory
+
+        [ssl]
+        certfile = /home/centos/cqlsh_key/client-ca.pem
+        userkey = /home/centos/cqlsh_key/client_key.key
+        usercert = /home/centos/cqlsh_key/client_cert.crt_signed
+        validate = false
+
+        [certfiles]
+        {the ip of node A} = /home/centos/cqlsh_key/client_cert.crt_signed
+        {the ip of node B} = /home/centos/cqlsh_key/client_cert.crt_signed
+        {the ip of node C} = /home/centos/cqlsh_key/client_cert.crt_signed
+
+    6. restart cassandra server, then test:
+
+        cqlsh --debug --cqlshrc=cqlshrc --ssl -u {username} -p {password} {IP}
